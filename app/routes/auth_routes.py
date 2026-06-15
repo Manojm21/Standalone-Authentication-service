@@ -9,7 +9,7 @@ from app.dependencies import get_db, get_current_user
 
 router = APIRouter(tags=["Authentication"])
 
-
+# response_model is a fastAPI route parameter definition for outgoing (to client) contract enforcement 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register(user: UserCreate, db: Session = Depends(get_db)):
     existing_user = (
@@ -57,7 +57,7 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     access_token = create_access_token(data={"sub": str(db_user.id)})
     return {"access_token": access_token, "token_type": "bearer"}
 
-
+# DI of get_current_user means this route requires authentication. If token is missing/invalid, user will get 401 before reaching route code.
 @router.get("/me", response_model=UserResponse)
 def get_me(current_user: User = Depends(get_current_user)):
     return current_user
