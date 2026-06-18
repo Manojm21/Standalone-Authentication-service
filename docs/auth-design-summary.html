@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Auth System Design Summary</title>
+    <style>
+        @media print {
+            body { font-size: 11px; }
+            .page-break { page-break-before: always; }
+            table { page-break-inside: avoid; }
+        }
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 30px;
+            color: #1a1a1a;
+            line-height: 1.6;
+        }
+        h1 {
+            text-align: center;
+            border-bottom: 3px solid #2563eb;
+            padding-bottom: 12px;
+            color: #1e293b;
+        }
+        h2 {
+            color: #2563eb;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 6px;
+            margin-top: 32px;
+        }
+        h3 {
+            color: #475569;
+            margin-top: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 12px 0 20px 0;
+            font-size: 13px;
+        }
+        th, td {
+            border: 1px solid #cbd5e1;
+            padding: 8px 10px;
+            text-align: left;
+            vertical-align: top;
+        }
+        th {
+            background: #f1f5f9;
+            font-weight: 600;
+            color: #334155;
+        }
+        tr:nth-child(even) { background: #f8fafc; }
+        code {
+            background: #f1f5f9;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-size: 12px;
+            font-family: 'Consolas', 'Courier New', monospace;
+        }
+        pre {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 14px 18px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .highlight { background: #fef3c7; padding: 2px 4px; border-radius: 2px; }
+        .warn { color: #dc2626; font-weight: 600; }
+        .ok { color: #16a34a; font-weight: 600; }
+        .meta {
+            text-align: center;
+            color: #64748b;
+            font-size: 12px;
+            margin-bottom: 30px;
+        }
+        .flow-box {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 16px;
+            margin: 12px 0;
+        }
+        .arrow { color: #2563eb; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<h1>Auth System — Complete Design Summary</h1>
+<p class="meta">Project: FastAPI Backend &nbsp;|&nbsp; Phase 2 Complete &nbsp;|&nbsp; June 2026</p>
+
+<!-- ============================================ -->
+<h2>1. Token Comparison</h2>
+<table>
+    <tr>
+        <th></th>
+        <th>Access Token</th>
+        <th>Refresh Token</th>
+    </tr>
+    <tr>
+        <td><strong>Format</strong></td>
+        <td>JWT (signed, base64-encoded JSON)</td>
+        <td>Opaque random string (<code>secrets.token_urlsafe(32)</code>)</td>
+    </tr>
+    <tr>
+        <td><strong>Lifetime</strong></td>
+        <td>15 minutes</td>
+        <td>7 days</td>
+    </tr>
+    <tr>
+        <td><strong>Client Storage</strong></td>
+        <td>Memory (sent in <code>Authorization: Bearer</code> header)</td>
+        <td>App storage (sent in request body to <code>/refresh</code> and <code>/logout</code>)</td>
+    </tr>
+    <tr>
+        <td><strong>Server Storage</strong></td>
+        <td>Nowhere (stateless)</td>
+        <td>SHA-256 hash in <code>refresh_tokens</code> table</td>
+    </tr>
+    <tr>
+        <td><strong>Validation</strong></td>
+        <td>Signature + expiry check (no DB hit)</td>
+        <td>Hash lookup in DB</td>
+    </tr>
+    <tr>
+        <td><strong>Instantly Revocable?</strong></td>
+        <td class="warn">No — must wait for 15-min expiry</td>
+        <td class="ok">Yes — set <code>revoked = True</code></td>
+    </tr>
+    <tr>
+        <td><strong>JWT Payload</strong></td>
+        <td><code>{"sub": "user_id", "exp": timestamp, "type": "access"}</code></td>
+        <td>N/A — no information inside (random bytes)</td>
+    </tr>
+</table>
+
+<!-- ============================================ -->
+<h2>2. Datetime Handling (SQLite Quirk)</h2>
+<table>
+    <tr><th>When</th><th>What Happens</th><th>Timezone</th></tr>
+    <tr>
+        <td>Writing to DB</td>
+        <td><code>datetime.now(timezone.utc)</code></td>
+        <td>Aware (has UTC info)</td>
+    </tr>
+    <tr>
+        <td>SQLite stores it</td>
+        <td>Strips timezone → <code>"2026-06-18 15:30:00"</code></td>
+        <td>Naive (no timezone)</td>
+    </tr>
+    <tr>
+        <td>Reading from DB</td>
+        <td>SQLAlchemy returns naive datetime</td>
+        <td>Naive</td>
+    </tr>
+    <tr>
+        <td>Comparing</td>
+        <td><code>.replace(tzinfo=timezone.utc) &lt; datetime.now(timezone.utc)</code></td>
+        <td>Convert back to aware</td>
+    </tr>
+</table>
+<p><strong>Note:</strong> This problem disappears with PostgreSQL (Phase 5) — Postgres handles timezone-aware datetimes natively.</p>
+
+<!-- ============================================ -->
+<h2>3. Execution Flows</h2>
+
+<h3>3.1 Register</h3>
+<div class="flow-box">
+<pre>
+Client                          Server                         DB
+  │                               │                             │
+  ├─ POST /register ─────────────►│                             │
+  │  {email, password}            │─ hash_password(bcrypt) ────►│
+  │                               │─ INSERT users ─────────────►│
+  │◄─ 201 {id, email} ───────────│                             │
+</pre>
+</div>
+
+<h3>3.2 Login (creates both tokens)</h3>
+<div class="flow-box">
+<pre>
+Client                          Server                         DB
+  │                               │                             │
+  ├─ POST /login ────────────────►│                             │
+  │  {username, password}         │─ SELECT user by email ─────►│
+  │                               │─ bcrypt.checkpw()           │
+  │                               │─ create_access_token(JWT)   │ (no DB write)
+  │                               │─ create_refresh_token()     │
+  │                               │─ sha256(raw) ──────────────►│ INSERT refresh_tokens
+  │◄─ 200 {access, refresh} ─────│                             │
+  │                               │                             │
+  │  Client saves BOTH tokens     │                             │
+</pre>
+</div>
+
+<h3>3.3 Authenticated Request (/me or any protected route)</h3>
+<div class="flow-box">
+<pre>
+Client                          Server                         DB
+  │                               │                             │
+  ├─ GET /me ────────────────────►│                             │
+  │  Header: Bearer &lt;access&gt;      │─ jwt.decode()              │ (NO DB hit)
+  │                               │─ check type == "access"    │
+  │                               │─ check not expired         │
+  │                               │─ SELECT user by id ────────►│
+  │◄─ 200 {id, email} ───────────│                             │
+</pre>
+</div>
+
+<h3>3.4 Refresh (with rotation)</h3>
+<div class="flow-box">
+<pre>
+Client                          Server                         DB
+  │                               │                             │
+  ├─ POST /refresh ──────────────►│                             │
+  │  {refresh_token: raw}         │─ sha256(raw)               │
+  │                               │─ SELECT by hash ───────────►│
+  │                               │─ check not revoked          │
+  │                               │─ check expires_at > now     │
+  │                               │─ old.revoked = True ───────►│ UPDATE (rotation)
+  │                               │─ create new refresh token   │
+  │                               │─ INSERT new row ───────────►│
+  │                               │─ create new access token    │
+  │◄─ 200 {new_access, new_refresh}                            │
+  │                               │                             │
+  │  OLD refresh token is DEAD    │                             │
+</pre>
+</div>
+
+<h3>3.5 Logout (single device only)</h3>
+<div class="flow-box">
+<pre>
+Client                          Server                         DB
+  │                               │                             │
+  ├─ POST /logout ───────────────►│                             │
+  │  {refresh_token: raw}         │─ sha256(raw)               │
+  │                               │─ SELECT by hash ───────────►│
+  │                               │─ row.revoked = True ───────►│ UPDATE
+  │◄─ 204 No Content ────────────│                             │
+  │                               │                             │
+  │  Client discards access token │                             │
+</pre>
+</div>
+
+<!-- ============================================ -->
+<div class="page-break"></div>
+<h2>4. When Does Authorization Die?</h2>
+<table>
+    <tr><th>Scenario</th><th>Access Token</th><th>Refresh Token</th><th>User Must...</th></tr>
+    <tr>
+        <td>Normal expiry</td>
+        <td>Dies after 15 min</td>
+        <td>Dies after 7 days</td>
+        <td>Refresh → or → Re-login</td>
+    </tr>
+    <tr>
+        <td>Refresh called</td>
+        <td>Still alive (until own 15min)</td>
+        <td>OLD one dies immediately (rotation)</td>
+        <td>Use new tokens</td>
+    </tr>
+    <tr>
+        <td>Logout called</td>
+        <td>Still works up to 15 min</td>
+        <td>Dies immediately</td>
+        <td>Re-login when access expires</td>
+    </tr>
+    <tr>
+        <td>Token stolen + rotation happened</td>
+        <td>Attacker's access works briefly</td>
+        <td>Attacker's refresh is dead</td>
+        <td>Attacker locked out after 15 min</td>
+    </tr>
+    <tr>
+        <td>Both tokens lost (app crash)</td>
+        <td>Can't send it</td>
+        <td>Can't send it</td>
+        <td>Re-login</td>
+    </tr>
+</table>
+
+<h3>The 15-Minute Window Trade-off</h3>
+<p>After logout, the access token remains valid for up to 15 minutes. This is the deliberate trade-off of stateless JWTs — checking every access token against a DB on every request would defeat the purpose. If you ever need <strong>instant</strong> access-token kill, that's what Redis denylists solve (Phase 5).</p>
+
+<!-- ============================================ -->
+<h2>5. Error Contract (Frontend Decision Tree)</h2>
+<table>
+    <tr><th>Response</th><th>Meaning</th><th>Client Action</th></tr>
+    <tr>
+        <td><code>401 {"detail": "expired_token"}</code></td>
+        <td>Access token was valid but time's up</td>
+        <td><span class="arrow">→</span> Call <code>POST /refresh</code></td>
+    </tr>
+    <tr>
+        <td><code>401 {"detail": "invalid_token"}</code></td>
+        <td>Token is garbage, tampered, or wrong type</td>
+        <td><span class="arrow">→</span> Redirect to login</td>
+    </tr>
+    <tr>
+        <td><code>401 {"detail": "Invalid or expired refresh token"}</code></td>
+        <td>Refresh token dead/expired/revoked</td>
+        <td><span class="arrow">→</span> Redirect to login</td>
+    </tr>
+    <tr>
+        <td><code>204</code> on <code>/logout</code></td>
+        <td>Logout processed (or token was already dead)</td>
+        <td><span class="arrow">→</span> Clear local tokens</td>
+    </tr>
+</table>
+
+<!-- ============================================ -->
+<h2>6. Multi-Device Model</h2>
+<div class="flow-box">
+<pre>
+User "test@test.com"
+  ├── Login from Laptop  → RefreshToken row #1 (jti: abc...)
+  ├── Login from Phone   → RefreshToken row #2 (jti: def...)
+  └── Login from Tablet  → RefreshToken row #3 (jti: ghi...)
+
+Logout Phone → ONLY row #2 revoked
+Laptop and Tablet continue working independently
+</pre>
+</div>
+<p>Each login creates its own row. Each row has its own lifecycle. They never interfere.</p>
+
+<!-- ============================================ -->
+<h2>7. Security Layers</h2>
+<table>
+    <tr><th>Layer</th><th>How</th></tr>
+    <tr><td>Password never stored raw</td><td>bcrypt hash (salt + slow hash)</td></tr>
+    <tr><td>Refresh token never stored raw</td><td>SHA-256 hash (DB leak = useless)</td></tr>
+    <tr><td>Access token can't be forged</td><td>HMAC-SHA256 signature with SECRET_KEY</td></tr>
+    <tr><td>Refresh can't be used as access</td><td><code>"type": "access"</code> claim checked in <code>get_current_user</code></td></tr>
+    <tr><td>Old refresh can't be reused</td><td>Rotation sets <code>revoked = True</code> on every refresh</td></tr>
+    <tr><td>SECRET_KEY validated at boot</td><td>pydantic Settings with <code>min_length=32</code> — app won't start without it</td></tr>
+</table>
+
+<!-- ============================================ -->
+<h2>8. Database State Example</h2>
+<p>After login → refresh → refresh (showing rotation chain):</p>
+<table>
+    <tr><th>id</th><th>jti</th><th>user_id</th><th>revoked</th><th>expires_at</th><th>Status</th></tr>
+    <tr>
+        <td>1</td><td>a1b2c3...</td><td>3</td>
+        <td class="warn">True</td><td>2026-06-25</td><td>Original login, rotated away</td>
+    </tr>
+    <tr>
+        <td>2</td><td>d4e5f6...</td><td>3</td>
+        <td class="warn">True</td><td>2026-06-25</td><td>First refresh, rotated away</td>
+    </tr>
+    <tr>
+        <td>3</td><td>g7h8i9...</td><td>3</td>
+        <td class="ok">False</td><td>2026-06-25</td><td>Current active token</td>
+    </tr>
+</table>
+
+<!-- ============================================ -->
+<div class="page-break"></div>
+<h2>9. Project File Structure</h2>
+<table>
+    <tr><th>File</th><th>Responsibility</th></tr>
+    <tr><td><code>app/config.py</code></td><td>Settings via pydantic-settings; startup validation</td></tr>
+    <tr><td><code>app/auth.py</code></td><td>Token creation, password hashing, refresh token helpers</td></tr>
+    <tr><td><code>app/models.py</code></td><td>SQLAlchemy models: User, RefreshToken</td></tr>
+    <tr><td><code>app/schema.py</code></td><td>Pydantic request/response schemas</td></tr>
+    <tr><td><code>app/dependencies.py</code></td><td><code>get_db</code>, <code>get_current_user</code> (token validation)</td></tr>
+    <tr><td><code>app/database.py</code></td><td>Engine, SessionLocal, Base</td></tr>
+    <tr><td><code>app/routes/auth_routes.py</code></td><td>Endpoints: register, login, me, refresh, logout</td></tr>
+    <tr><td><code>app/main.py</code></td><td>FastAPI app creation, router inclusion</td></tr>
+</table>
+
+<!-- ============================================ -->
+<h2>10. Future Roadmap</h2>
+<table>
+    <tr><th>Phase</th><th>What</th><th>Why</th></tr>
+    <tr>
+        <td><strong>Phase 3</strong></td>
+        <td>Roles, Permissions, RBAC</td>
+        <td>Admin vs user routes; <code>require_role("admin")</code> dependency</td>
+    </tr>
+    <tr>
+        <td><strong>Phase 4</strong></td>
+        <td>Alembic + PostgreSQL + Docker + Pytest</td>
+        <td>Real DB, migrations, reproducible deploys, automated tests</td>
+    </tr>
+    <tr>
+        <td><strong>Phase 5</strong></td>
+        <td>Redis + Rate Limiting + Token Denylist</td>
+        <td>Instant access-token kill, brute-force protection, caching</td>
+    </tr>
+    <tr>
+        <td><strong>Phase 6</strong></td>
+        <td>Observability (Logging, Metrics, Health Checks)</td>
+        <td>JSON logs with request_id, Prometheus metrics, <code>/health</code> endpoint</td>
+    </tr>
+</table>
+
+<h3>Phase 3 Preview — What Changes</h3>
+<table>
+    <tr><th>Task</th><th>Detail</th></tr>
+    <tr><td>Add <code>role</code> column to User</td><td><code>Column(String, default="user")</code> — values: "user", "admin"</td></tr>
+    <tr><td>Add <code>role</code> claim to JWT</td><td>Access token payload gets <code>"role": "admin"</code></td></tr>
+    <tr><td>Role-checking dependency</td><td><code>require_role("admin")</code> wraps <code>get_current_user</code></td></tr>
+    <tr><td>Admin-only routes</td><td>List all users, delete user, view all sessions</td></tr>
+</table>
+
+<h3>Phase 4 Preview — Infrastructure</h3>
+<table>
+    <tr><th>Task</th><th>Detail</th></tr>
+    <tr><td>PostgreSQL</td><td>Replace SQLite; fixes timezone issue, handles concurrency</td></tr>
+    <tr><td>Alembic</td><td>Version-controlled migrations instead of <code>create_all()</code></td></tr>
+    <tr><td>Docker</td><td><code>docker-compose.yml</code> with app + postgres + redis</td></tr>
+    <tr><td>Pytest</td><td>Unit tests for auth, integration tests for full flows</td></tr>
+</table>
+
+<h3>Phase 5 Preview — Redis Solves</h3>
+<table>
+    <tr><th>Problem</th><th>Redis Solution</th></tr>
+    <tr><td>15-min window after logout</td><td>Access token denylist (check on every request)</td></tr>
+    <tr><td>Brute-force on /login</td><td>Rate limiting (IP + email based)</td></tr>
+    <tr><td>Refresh token reuse detection</td><td>Token family tracking with instant revocation</td></tr>
+</table>
+
+<!-- ============================================ -->
+<div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e2e8f0; text-align: center; color: #94a3b8; font-size: 11px;">
+    Auth System Design Summary — Phase 2 Complete — Generated June 2026
+</div>
+
+</body>
+</html>
