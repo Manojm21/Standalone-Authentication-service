@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
-from app.auth import SECRET_KEY, ALGORITHM
+from app.config import settings
 from app.models import User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
@@ -31,7 +31,7 @@ db: Session = Depends(get_db),
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},)
     try:
-        payload =jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload =jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         #  sub has the user id because when we created the token in auth.py, we put user id in sub claim. sub stands for subject and is a standard JWT claim for the principal that is the subject of the token. In our case, it's the user id.
         user_id= payload.get("sub")
 

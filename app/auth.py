@@ -2,14 +2,7 @@ from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
 import bcrypt
 from typing import Optional
-
-from dotenv import load_dotenv
-import os
-#these three can be done based on our requirements
-load_dotenv()
-SECRET_KEY = os.getenv("SECRET_KEY")    
-ALGORITHM = os.getenv("ALGORITHM")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30))
+from app.config import settings
 
 # decode is to convert back to string/original data from Base64 encoded string. encode is to convert to Base64 encoded string from original data/string.
 def hash_password(password:str)-> str:
@@ -32,8 +25,8 @@ def create_access_token(data:dict, expires_delta:Optional[timedelta]=None)-> str
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     # Adds JWT standard expiration claim. This means token is invalid after this timestamp. this exp is added in the payload of the JWT.
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
