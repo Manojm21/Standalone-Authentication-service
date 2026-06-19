@@ -2,6 +2,7 @@
 # Typing = data type language
 from pydantic import BaseModel, EmailStr, Field
 from typing import Annotated
+from datetime import datetime
 
 # It lets you attach extra metadata/constraints to a type.
 PasswordType = Annotated[str, Field(min_length=8, max_length=72)]
@@ -22,6 +23,7 @@ class UserLogin(BaseModel):
 class UserResponse(BaseModel):
     id: int
     email: EmailStr
+    role: str
 
 # from_attributes = True tells Pydantic: "read values using obj.field_name instead of obj["field_name"]."
     class Config:
@@ -36,3 +38,14 @@ class Token(BaseModel):
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
     
+class SessionResponse(BaseModel):
+    id: int
+    jti: str
+    user_id: int
+    device_name: str | None
+    expires_at: datetime
+    revoked: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

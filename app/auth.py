@@ -29,10 +29,11 @@ def create_access_token(data:dict, expires_delta:Optional[timedelta]=None)-> str
         expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     # Adds JWT standard expiration claim. This means token is invalid after this timestamp. this exp is added in the payload of the JWT.
     to_encode.update({"exp": expire, "type": "access"})
+
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
+    
 # secrets.token_urlsafe(32) — generates a cryptographically secure random string (URL-safe base64, 256 bits of entropy). This is your raw refresh token that gets sent to the client.
-
 # hashlib.sha256(token.encode()).hexdigest() — produces the hash you store in the DB.
 def create_refresh_token()-> tuple[str, str]:
     raw_token= secrets.token_urlsafe(32)
